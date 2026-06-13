@@ -67,3 +67,49 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 @app.get("/me")
 def read_current_user(current_user: User = Depends(get_current_user)):
     return {"id": current_user.id, "email": current_user.email}
+
+from fastapi import Query
+from models import Merchant, Transaction
+from typing import Optional
+
+
+@app.get("/transactions")
+def get_transactions(
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    merchant = db.query(Merchant).filter(Merchant.user_id == current_user.id).first()
+    query = db.query(Transaction).filter(Transaction.merchant_id == merchant.id)
+
+    if status:
+        query = query.filter(Transaction.status == status)
+
+    if search:
+        query = query.filter(Transaction.id == int(search)) if search.isdigit() else query
+
+    total = query.count()
+    transactions = query.order_by(Transaction.timestamp.desc()) \
+                         .offset((page - 1) * page_size) \
+                         .limit(page_size) \
+                         .all()
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "transactions": [
+            {
+                "id": t.id,
+                "amount": t.amount,
+                "status": t.status,
+                "timestamp": t.timestamp,
+                "risk_score": t.risk_score,
+                "is_flagged": t.is_flagged
+            }
+            for t in transactions
+        ]
+    }
