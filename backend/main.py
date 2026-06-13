@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from models import User, SessionLocal
 from auth import hash_password, verify_password, create_access_token, decode_access_token
 
@@ -111,5 +112,92 @@ def get_transactions(
                 "is_flagged": t.is_flagged
             }
             for t in transactions
+        ]
+    }
+
+    from sqlalchemy import func
+from datetime import datetime, timedelta
+
+
+@app.get("/analytics/summary")
+def get_summary(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    merchant = db.query(Merchant).filter(Merchant.user_id == current_user.id).first()
+
+    base_query = db.query(Transaction).filter(Transaction.merchant_id == merchant.id)
+
+    total_transactions = base_query.count()
+
+    total_revenue = db.query(func.sum(Transaction.amount)) \
+        .filter(Transaction.merchant_id == merchant.id, Transaction.status == "success") \
+        .scalar() or 0
+
+    flagged_count = base_query.filter(Transaction.is_flagged == True).count()
+
+    success_count = base_query.filter(Transaction.status == "success").count()
+    success_rate = round((success_count / total_transactions) * 100, 1) if total_transactions > 0 else 0
+
+    return {
+        "total_revenue": round(total_revenue, 2),
+        "total_transactions": total_transactions,
+        "flagged_count": flagged_count,
+        "success_rate": success_rate
+    }
+
+
+@app.get("/analytics/daily")
+def get_daily_analytics(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    merchant = db.query(Merchant).filter(Merchant.user_id == current_user.id).first()
+
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+
+    results = db.query(
+        func.date(Transaction.timestamp).label("date"),
+        func.sum(Transaction.amount).label("revenue"),
+        func.count(Transaction.id).label("count")
+    ).filter(
+        Transaction.merchant_id == merchant.id,
+        Transaction.timestamp >= thirty_days_ago
+    ).group_by(
+        func.date(Transaction.timestamp)
+    ).order_by(
+        func.date(Transaction.timestamp)
+    ).all()
+
+    return {
+        "daily": [
+            {
+                "date": str(row.date),
+                "revenue": round(row.revenue, 2),
+                "count": row.count
+            }
+            for row in results
+        ]
+    }
+
+
+@app.get("/analytics/status-breakdown")
+def get_status_breakdown(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    merchant = db.query(Merchant).filter(Merchant.user_id == current_user.id).first()
+
+    results = db.query(
+        Transaction.status,
+        func.count(Transaction.id).label("count")
+    ).filter(
+        Transaction.merchant_id == merchant.id
+    ).group_by(Transaction.status).all()
+
+    return {
+        "breakdown": [
+            {"status": row.status, "count": row.count}
+            for row in results
         ]
     }
